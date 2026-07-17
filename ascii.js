@@ -88,6 +88,7 @@
       const x = c.getContext('2d');
       x.textAlign = 'center';
       x.textBaseline = 'middle';
+      x.fillStyle = '#fff';   // plain glyphs need ink; emoji ignore this
       x.font = `${size * 0.8}px system-ui, sans-serif`;
       x.fillText(glyph, size / 2, size / 2 + size * 0.04);
       this._grid(size, size);
