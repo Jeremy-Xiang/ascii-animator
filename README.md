@@ -4,10 +4,7 @@ Turn any **image, emoji, or your webcam** into live, animated ASCII art in the b
 Zero dependencies, one script tag, canvas-rendered for speed — with a `getText()`
 escape hatch when you want the actual characters.
 
-**[Live demo →](https://jeremy-xiang.github.io/ascii-animator/)** *(enable GitHub Pages on this repo)*
-
-Inspired by the image→ASCII animation trend; built from scratch with
-[Claude (Fable 5)](https://www.anthropic.com).
+**[Live demo →](https://jeremy-xiang.github.io/ascii-animator/)**
 
 ## Quick start
 
