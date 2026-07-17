@@ -1,7 +1,7 @@
 /*!
- * ascii-animator — turn any image, emoji, or video into live animated ASCII art.
+ * ascii-animator — turn any image, emoji, video, or webcam into live animated ASCII art.
  * Zero dependencies. Canvas-rendered for speed and color; getText() returns the
- * plain-text frame for copy/paste.
+ * plain-text frame for copy/paste, downloadPNG()/downloadText() save a frame.
  *
  * Usage:
  *   const art = new AsciiAnimator(document.querySelector('#out'), {
@@ -10,13 +10,18 @@
  *     color: 'mono',                // 'mono' (single ink) | 'source' (sampled)
  *     ink: '#4dff88',               // mono ink color
  *     background: '#0a0c0a',
- *     animation: 'dissolve',        // 'dissolve' | 'wave' | 'none'  (static sources)
+ *     animation: 'dissolve',        // 'dissolve' | 'wave' | 'typewriter' | 'none'
  *     fontSize: 10,                 // px, canvas render size
+ *     edges: false,                 // true = Sobel line-art instead of luminance ramp
  *   });
  *   await art.fromImage('portrait.jpg');   // or an <img>, File, Blob, canvas
  *   art.fromText('🔥', 280);               // emoji / glyph source
+ *   await art.fromVideo('clip.mp4');       // any video file/URL, loops, muted autoplay
  *   await art.fromCamera();                // live webcam ASCII
+ *   art.pause(); art.play();               // freeze / resume the current source
  *   art.getText();                         // current frame as a string
+ *   art.downloadText('frame.txt');         // save the current frame as .txt
+ *   art.downloadPNG('frame.png');          // save the rendered canvas as .png
  *   art.destroy();
  */
 (function (root, factory) {
@@ -35,7 +40,9 @@
     fontSize: 10,
     fps: 30,            // live-source sampling cap
     aspect: 0.52,       // monospace glyphs are ~half as wide as tall
+    edges: false,       // true = Sobel-derived line art instead of a luminance ramp
   };
+  const EDGE_CHARSET = ' ·-\\|/+#';   // low→high gradient magnitude
 
   class AsciiAnimator {
     constructor(canvas, opts = {}) {
@@ -49,11 +56,12 @@
       this.sctx = this.sample.getContext('2d', { willReadFrequently: true });
       this.cells = null;        // {lum, r, g, b} per cell
       this.rows = 0;
-      this.live = null;         // video element when in live mode
-      this.stream = null;
+      this.live = null;         // video element when in camera/video mode
+      this.stream = null;       // MediaStream, only set for fromCamera
       this._raf = 0;
       this._t0 = performance.now();
       this._lastLive = 0;
+      this._paused = false;
       this._reduced = typeof matchMedia === 'function'
         && matchMedia('(prefers-reduced-motion: reduce)').matches;
     }
@@ -113,22 +121,87 @@
       return this;
     }
 
+    /** Any video file, URL, or Blob → looping ASCII. Not mirrored (unlike the camera). */
+    async fromVideo(src) {
+      this._stopLive();
+      const video = document.createElement('video');
+      video.muted = true;
+      video.playsInline = true;
+      video.loop = true;
+      video.crossOrigin = 'anonymous';
+      video.src = src instanceof Blob ? URL.createObjectURL(src) : src;
+      await new Promise((res, rej) => {
+        video.onloadedmetadata = res;
+        video.onerror = () => rej(new Error('AsciiAnimator: could not load video source'));
+      });
+      await video.play();
+      this.live = video;
+      this._grid(video.videoWidth, video.videoHeight, false);
+      this._restartAnimation();
+      return this;
+    }
+
+    /** Freeze on the current frame (live sources stop sampling; animations stop advancing). */
+    pause() {
+      if (this._paused) return;
+      this._paused = true;
+      this._pausedAt = performance.now() - this._t0;
+      cancelAnimationFrame(this._raf);
+      if (this.live && this.live.pause) this.live.pause();
+    }
+
+    /** Resume after pause(). */
+    play() {
+      if (!this._paused) return;
+      this._paused = false;
+      this._t0 = performance.now() - (this._pausedAt || 0);
+      if (this.live && this.live.play) this.live.play().catch(() => {});
+      this._raf = requestAnimationFrame(this._loop);
+    }
+
     /* ── output ──────────────────────────────────────────── */
 
     /** Current frame as plain text (what's on screen, minus color). */
     getText() {
       if (!this.cells) return '';
-      const { charset } = this.opts;
+      const { charset, edges } = this.opts;
+      const set = edges ? EDGE_CHARSET : charset;
+      const ramp = set.length - 1;
       let out = '';
       for (let y = 0; y < this.rows; y++) {
         for (let x = 0; x < this.opts.cols; x++) {
           const cell = this.cells[y * this.opts.cols + x];
-          const i = Math.min(charset.length - 1, Math.round(cell.lum * (charset.length - 1)));
-          out += charset[i];
+          const v = edges ? cell.edge : cell.lum;
+          const i = Math.min(ramp, Math.round(v * ramp));
+          out += set[i];
         }
         out += '\n';
       }
       return out;
+    }
+
+    /** Save the current frame as a monospace .txt file. */
+    downloadText(filename = 'ascii-frame.txt') {
+      const blob = new Blob([this.getText()], { type: 'text/plain' });
+      this._downloadBlob(blob, filename);
+    }
+
+    /** Save the current rendered canvas as a .png file. */
+    downloadPNG(filename = 'ascii-frame.png') {
+      this.canvas.toBlob((blob) => {
+        if (blob) this._downloadBlob(blob, filename);
+      }, 'image/png');
+    }
+
+    _downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
     }
 
     set(opts) {
@@ -150,6 +223,9 @@
 
     _stopLive() {
       if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
+      if (this.live && this.live.src && this.live.src.startsWith('blob:')) {
+        URL.revokeObjectURL(this.live.src);
+      }
       this.live = null;
       this.stream = null;
     }
@@ -182,66 +258,100 @@
       this.sctx.drawImage(source, 0, 0, cols, this.rows);
       const data = this.sctx.getImageData(0, 0, cols, this.rows).data;
       const n = cols * this.rows;
+      const oldCells = this.cells;
       this.cells = new Array(n);
       for (let i = 0; i < n; i++) {
         const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2], a = data[i * 4 + 3];
         const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 * (a / 255);
+        // reuse dissolve schedule/scramble seed across live-frame resamples so a
+        // playing video doesn't re-roll (and re-flicker) every single frame
+        const prev = oldCells && oldCells[i];
         this.cells[i] = {
-          lum, r, g, b,
-          delay: Math.random() * 1200,          // dissolve schedule, ms
-          seed: (Math.random() * 94) | 0,       // scramble glyph
+          lum, r, g, b, edge: 0,
+          delay: prev ? prev.delay : Math.random() * 1200,
+          seed: prev ? prev.seed : (Math.random() * 94) | 0,
         };
       }
+      if (this.opts.edges) this._computeEdges(cols, this.rows);
+    }
+
+    /** Sobel gradient magnitude over the luminance grid, normalized to 0..1. */
+    _computeEdges(cols, rows) {
+      const at = (x, y) => this.cells[Math.min(rows - 1, Math.max(0, y)) * cols
+        + Math.min(cols - 1, Math.max(0, x))].lum;
+      let maxMag = 0.0001;
+      const mags = new Float32Array(cols * rows);
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const gx = (at(x + 1, y - 1) + 2 * at(x + 1, y) + at(x + 1, y + 1))
+            - (at(x - 1, y - 1) + 2 * at(x - 1, y) + at(x - 1, y + 1));
+          const gy = (at(x - 1, y + 1) + 2 * at(x, y + 1) + at(x + 1, y + 1))
+            - (at(x - 1, y - 1) + 2 * at(x, y - 1) + at(x + 1, y - 1));
+          const mag = Math.sqrt(gx * gx + gy * gy);
+          mags[y * cols + x] = mag;
+          if (mag > maxMag) maxMag = mag;
+        }
+      }
+      for (let i = 0; i < mags.length; i++) this.cells[i].edge = mags[i] / maxMag;
     }
 
     _restartAnimation() {
       cancelAnimationFrame(this._raf);
       this._t0 = performance.now();
-      const loop = (now) => {
-        this._raf = requestAnimationFrame(loop);
-        if (this.live) {
-          if (now - this._lastLive < 1000 / this.opts.fps) return;
-          this._lastLive = now;
-          if (this.live.videoWidth) this._sampleFrom(this.live);
-          this._draw(now, 'live');
-        } else {
-          this._draw(now, this._reduced ? 'none' : this.opts.animation);
-        }
-      };
-      this._raf = requestAnimationFrame(loop);
+      this._paused = false;
+      if (!this._loop) {
+        this._loop = (now) => {
+          this._raf = requestAnimationFrame(this._loop);
+          if (this.live) {
+            if (now - this._lastLive < 1000 / this.opts.fps) return;
+            this._lastLive = now;
+            if (this.live.videoWidth) this._sampleFrom(this.live);
+            this._draw(now, 'live');
+          } else {
+            this._draw(now, this._reduced ? 'none' : this.opts.animation);
+          }
+        };
+      }
+      this._raf = requestAnimationFrame(this._loop);
     }
 
     _draw(now, mode) {
       if (!this.cells) return;
-      const { cols, charset, color, ink, background } = this.opts;
+      const { cols, charset, color, ink, background, edges } = this.opts;
       const t = now - this._t0;
       const ctx = this.ctx;
-      const ramp = charset.length - 1;
+      const set = edges ? EDGE_CHARSET : charset;
+      const ramp = set.length - 1;
+      // typewriter: one row unlocks roughly every 45ms, left-to-right within a row
+      const typeRow = mode === 'typewriter' ? t / 45 : Infinity;
 
       ctx.fillStyle = background;
       ctx.fillRect(0, 0, cols * this.cellW, this.rows * this.cellH);
 
       for (let y = 0; y < this.rows; y++) {
+        if (mode === 'typewriter' && y > typeRow) break;
+        const rowReveal = mode === 'typewriter' ? Math.min(1, typeRow - y) * cols : cols;
         for (let x = 0; x < cols; x++) {
+          if (mode === 'typewriter' && x > rowReveal) break;
           const cell = this.cells[y * cols + x];
-          let lum = cell.lum;
+          let v = edges ? cell.edge : cell.lum;
           let ch = null;
           let alpha = 1;
 
           if (mode === 'dissolve' && t < cell.delay + 350) {
             if (t < cell.delay) {
               if (cell.lum < 0.04) continue;           // dark cells stay dark
-              ch = charset[1 + ((cell.seed + ((t / 55) | 0)) % ramp)];
+              ch = charset[1 + ((cell.seed + ((t / 55) | 0)) % (charset.length - 1))];
               alpha = 0.3;
             } else {
               alpha = 0.3 + 0.7 * ((t - cell.delay) / 350);
             }
           } else if (mode === 'wave') {
-            lum = lum * (0.86 + 0.14 * Math.sin(x * 0.28 + y * 0.11 + t / 320));
+            v = v * (0.86 + 0.14 * Math.sin(x * 0.28 + y * 0.11 + t / 320));
           }
 
-          if (lum < 0.03 && !ch) continue;
-          if (!ch) ch = charset[Math.min(ramp, Math.round(lum * ramp))];
+          if (v < 0.03 && !ch) continue;
+          if (!ch) ch = set[Math.min(ramp, Math.round(v * ramp))];
           if (ch === ' ') continue;
 
           if (color === 'source') {
@@ -250,6 +360,15 @@
             ctx.fillStyle = alpha === 1 ? ink : this._inkAlpha(ink, alpha);
           }
           ctx.fillText(ch, x * this.cellW, y * this.cellH);
+        }
+      }
+      // typewriter cursor: a blinking block at the current write head
+      if (mode === 'typewriter' && typeRow < this.rows) {
+        const cy = Math.floor(typeRow);
+        const cx = Math.min(cols - 1, Math.floor((typeRow - cy) * cols));
+        if (Math.floor(t / 400) % 2 === 0) {
+          ctx.fillStyle = ink;
+          ctx.fillRect(cx * this.cellW, cy * this.cellH, this.cellW, this.cellH);
         }
       }
     }

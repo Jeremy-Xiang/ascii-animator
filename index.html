@@ -71,7 +71,7 @@ footer a{color:var(--green); text-decoration:none}
 
 <header>
   <h1><b>@</b> ascii-animator</h1>
-  <span class="tagline">image · emoji · webcam → live ASCII art. zero dependencies.</span>
+  <span class="tagline">image · emoji · video · webcam → live ASCII art. zero dependencies.</span>
   <a href="https://github.com/Jeremy-Xiang/ascii-animator" rel="noopener">github ↗</a>
 </header>
 
@@ -100,7 +100,10 @@ footer a{color:var(--green); text-decoration:none}
     <select id="sColor"><option value="mono">terminal green</option><option value="source">source colors</option></select>
   </div>
   <div class="grp"><label>Animation</label>
-    <select id="sAnim"><option value="dissolve">dissolve in</option><option value="wave">shimmer wave</option><option value="none">static</option></select>
+    <select id="sAnim"><option value="dissolve">dissolve in</option><option value="wave">shimmer wave</option><option value="typewriter">typewriter</option><option value="none">static</option></select>
+  </div>
+  <div class="grp"><label>Style</label>
+    <button id="edgeBtn">edges only</button>
   </div>
   <div class="grp"><label>Try</label>
     <div class="row emoji-row">
@@ -112,8 +115,17 @@ footer a{color:var(--green); text-decoration:none}
     <div class="row">
       <label class="filebtn" for="file">upload image</label>
       <input type="file" id="file" accept="image/*">
+      <label class="filebtn" for="vfile">upload video</label>
+      <input type="file" id="vfile" accept="video/*">
       <button id="camBtn">webcam</button>
+    </div>
+  </div>
+  <div class="grp"><label>Playback</label>
+    <div class="row">
+      <button id="pauseBtn">pause</button>
       <button id="copyBtn">copy as text</button>
+      <button id="pngBtn">save .png</button>
+      <button id="txtBtn">save .txt</button>
     </div>
   </div>
 </div>
@@ -141,13 +153,21 @@ function showImgSource(url){
   img.alt = 'source image';
   srcBody.appendChild(img);
 }
+function showVideoSource(url){
+  srcBody.innerHTML = '';
+  const v = document.createElement('video');
+  v.src = url; v.muted = true; v.loop = true; v.autoplay = true; v.playsInline = true;
+  v.style.maxWidth = '100%'; v.style.maxHeight = '100%';
+  srcBody.appendChild(v);
+}
 function updateDims(){
   dims.textContent = '· ' + art.opts.cols + '×' + art.rows;
 }
-
-/* boot with the reel's fire emoji */
-art.fromText('🔥');
-updateDims();
+function resetPlaybackUI(){
+  paused = false;
+  pauseBtn.textContent = 'pause';
+  pauseBtn.classList.remove('on');
+}
 
 /* controls */
 document.getElementById('rCols').addEventListener('input', e => {
@@ -165,6 +185,7 @@ document.querySelectorAll('.emoji-row button').forEach(b => {
     art.fromText(b.dataset.glyph);
     showGlyphSource(b.dataset.glyph);
     updateDims();
+    resetPlaybackUI();
   });
 });
 
@@ -175,6 +196,18 @@ document.getElementById('file').addEventListener('change', async e => {
   await art.fromImage(f);
   showImgSource(URL.createObjectURL(f));
   updateDims();
+  resetPlaybackUI();
+});
+
+document.getElementById('vfile').addEventListener('change', async e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  camOff();
+  const url = URL.createObjectURL(f);
+  await art.fromVideo(url);
+  showVideoSource(url);
+  updateDims();
+  resetPlaybackUI();
 });
 
 const camBtn = document.getElementById('camBtn');
@@ -185,7 +218,7 @@ function camOff(){
   camBtn.textContent = 'webcam';
 }
 camBtn.addEventListener('click', async () => {
-  if (camOn) { camOff(); art.fromText('🔥'); showGlyphSource('🔥'); return; }
+  if (camOn) { camOff(); art.fromText('🔥'); showGlyphSource('🔥'); resetPlaybackUI(); return; }
   try {
     await art.fromCamera();
     camOn = true;
@@ -193,6 +226,7 @@ camBtn.addEventListener('click', async () => {
     camBtn.textContent = 'stop webcam';
     srcBody.innerHTML = '<span class="glyph">📷</span>';
     updateDims();
+    resetPlaybackUI();
   } catch (err) {
     camBtn.textContent = 'camera blocked';
     setTimeout(() => { camBtn.textContent = 'webcam'; }, 1800);
@@ -202,11 +236,47 @@ camBtn.addEventListener('click', async () => {
 document.getElementById('copyBtn').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(art.getText());
-    const t = document.getElementById('toastc');
-    t.classList.add('show');
-    setTimeout(() => t.classList.remove('show'), 1400);
+    toast('copied');
   } catch { /* clipboard unavailable */ }
 });
+
+function toast(msg){
+  const t = document.getElementById('toastc');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 1400);
+}
+
+const edgeBtn = document.getElementById('edgeBtn');
+edgeBtn.addEventListener('click', () => {
+  const on = !art.opts.edges;
+  art.set({ edges: on });
+  edgeBtn.classList.toggle('on', on);
+  edgeBtn.textContent = on ? 'edges: on' : 'edges only';
+});
+
+const pauseBtn = document.getElementById('pauseBtn');
+let paused = false;
+pauseBtn.addEventListener('click', () => {
+  paused = !paused;
+  paused ? art.pause() : art.play();
+  pauseBtn.textContent = paused ? 'play' : 'pause';
+  pauseBtn.classList.toggle('on', paused);
+});
+
+document.getElementById('pngBtn').addEventListener('click', () => {
+  art.downloadPNG('ascii-frame.png');
+  toast('saved ascii-frame.png');
+});
+document.getElementById('txtBtn').addEventListener('click', () => {
+  art.downloadText('ascii-frame.txt');
+  toast('saved ascii-frame.txt');
+});
+
+/* boot with the reel's fire emoji, now that every control is wired */
+art.fromText('🔥');
+updateDims();
+resetPlaybackUI();
 </script>
 </body>
 </html>
