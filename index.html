@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ascii-animator — image → live ASCII art</title>
+<meta name="description" content="Turn any image, emoji, or your webcam into live animated ASCII art. Zero dependencies, one script tag.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c0a'/%3E%3Ctext x='16' y='22' font-size='15' text-anchor='middle' fill='%234dff88' font-family='monospace'%3E%40%3C/text%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#0a0c0a; --panel:#101410; --line:rgba(180,255,200,.12);
+  --ink:#e8f5ec; --dim:#7b9483; --green:#4dff88;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:ui-monospace, Menlo, 'Cascadia Code', monospace;
+  min-height:100vh; display:flex; flex-direction:column;
+}
+header{display:flex; justify-content:space-between; align-items:baseline; gap:1rem;
+  padding:1.2rem 1.5rem; border-bottom:1px solid var(--line); flex-wrap:wrap}
+h1{font-size:1rem; letter-spacing:.04em; font-weight:600}
+h1 b{color:var(--green); font-weight:600}
+header a{color:var(--dim); font-size:.72rem; text-decoration:none}
+header a:hover{color:var(--green)}
+.tagline{color:var(--dim); font-size:.72rem}
+
+main{flex:1; display:flex; gap:1rem; padding:1.2rem 1.5rem; flex-wrap:wrap; align-items:flex-start; justify-content:center}
+.pane{background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden}
+.pane .bar{display:flex; align-items:center; gap:.6rem; padding:.55rem .9rem;
+  border-bottom:1px solid var(--line); font-size:.66rem; color:var(--dim);
+  text-transform:uppercase; letter-spacing:.14em}
+.pane .bar .dotr{width:8px;height:8px;border-radius:50%;background:#ff5f57}
+.pane .bar .doty{width:8px;height:8px;border-radius:50%;background:#febc2e}
+.pane .bar .dotg{width:8px;height:8px;border-radius:50%;background:#28c840}
+#srcPane .body{width:280px; height:280px; display:flex; align-items:center; justify-content:center; overflow:hidden}
+#srcPane img, #srcPane .glyph{max-width:100%; max-height:100%}
+#srcPane .glyph{font-size:150px; line-height:1}
+#outPane .body{padding:8px; overflow:auto; max-width:min(86vw,880px); max-height:70vh}
+#out{display:block}
+
+.controls{display:flex; flex-wrap:wrap; gap:1.2rem 1.8rem; align-items:flex-end; justify-content:center;
+  padding:1.2rem 1.5rem 1.4rem; border-top:1px solid var(--line)}
+.grp{display:flex; flex-direction:column; gap:.45rem; align-items:center}
+.grp label{font-size:.62rem; letter-spacing:.14em; text-transform:uppercase; color:var(--dim)}
+.grp label b{color:var(--green); font-weight:500}
+input[type=range]{-webkit-appearance:none; appearance:none; width:120px; height:2px; background:var(--line); border-radius:2px; cursor:ew-resize}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; width:12px; height:12px; border-radius:50%; background:var(--green)}
+input[type=range]::-moz-range-thumb{width:12px; height:12px; border:none; border-radius:50%; background:var(--green)}
+select,button,.filebtn{
+  font:inherit; font-size:.7rem; letter-spacing:.08em; color:var(--ink);
+  background:var(--panel); border:1px solid var(--line); border-radius:7px;
+  padding:.5rem .9rem; cursor:pointer; transition:.15s;
+}
+select:hover,button:hover,.filebtn:hover{border-color:var(--green); color:var(--green)}
+button.on{border-color:var(--green); color:var(--green)}
+a:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--green); outline-offset:2px}
+.row{display:flex; gap:.6rem; flex-wrap:wrap; justify-content:center}
+input[type=file]{display:none}
+.emoji-row button{padding:.4rem .55rem; font-size:1.1rem; line-height:1}
+footer{text-align:center; color:var(--dim); font-size:.62rem; letter-spacing:.1em; padding:0 1rem 1.3rem}
+footer a{color:var(--green); text-decoration:none}
+.toastc{position:fixed; left:50%; bottom:22px; transform:translateX(-50%); background:var(--panel);
+  border:1px solid var(--green); color:var(--green); border-radius:999px; padding:.55rem 1.1rem;
+  font-size:.68rem; letter-spacing:.1em; opacity:0; pointer-events:none; transition:opacity .25s}
+.toastc.show{opacity:1}
+@media(max-width:720px){#srcPane .body{width:200px;height:200px}#srcPane .glyph{font-size:100px}}
+</style>
+</head>
+<body>
+
+<header>
+  <h1><b>@</b> ascii-animator</h1>
+  <span class="tagline">image · emoji · webcam → live ASCII art. zero dependencies.</span>
+  <a href="https://github.com/Jeremy-Xiang/ascii-animator" rel="noopener">github ↗</a>
+</header>
+
+<main>
+  <div class="pane" id="srcPane">
+    <div class="bar"><span class="dotr"></span><span class="doty"></span><span class="dotg"></span> source</div>
+    <div class="body" id="srcBody"><span class="glyph" id="srcGlyph">🔥</span></div>
+  </div>
+  <div class="pane" id="outPane">
+    <div class="bar"><span class="dotr"></span><span class="doty"></span><span class="dotg"></span> ascii <span id="dims"></span></div>
+    <div class="body"><canvas id="out" aria-label="Animated ASCII rendering of the source image"></canvas></div>
+  </div>
+</main>
+
+<div class="controls">
+  <div class="grp"><label>Resolution <b id="vCols">120</b></label><input type="range" id="rCols" min="40" max="220" value="120"></div>
+  <div class="grp"><label>Charset</label>
+    <select id="sCharset">
+      <option value=" .:-=+*#%@">classic · .:-=+*#%@</option>
+      <option value=" .'`^:;li!|/(1{[?J0OM&#8W">dense ramp</option>
+      <option value=" ░▒▓█">blocks ░▒▓█</option>
+      <option value=" 01">binary 01</option>
+    </select>
+  </div>
+  <div class="grp"><label>Color</label>
+    <select id="sColor"><option value="mono">terminal green</option><option value="source">source colors</option></select>
+  </div>
+  <div class="grp"><label>Animation</label>
+    <select id="sAnim"><option value="dissolve">dissolve in</option><option value="wave">shimmer wave</option><option value="none">static</option></select>
+  </div>
+  <div class="grp"><label>Try</label>
+    <div class="row emoji-row">
+      <button data-glyph="🔥">🔥</button><button data-glyph="🏋️">🏋️</button><button data-glyph="🌍">🌍</button>
+      <button data-glyph="😎">😎</button><button data-glyph="🚀">🚀</button>
+    </div>
+  </div>
+  <div class="grp"><label>Source</label>
+    <div class="row">
+      <label class="filebtn" for="file">upload image</label>
+      <input type="file" id="file" accept="image/*">
+      <button id="camBtn">webcam</button>
+      <button id="copyBtn">copy as text</button>
+    </div>
+  </div>
+</div>
+
+<footer>drop this into any project: one canvas + <a href="ascii.js">ascii.js</a> · built by claude (fable 5) for jeremy xiang</footer>
+<div class="toastc" id="toastc">copied</div>
+
+<script src="ascii.js"></script>
+<script>
+const art = new AsciiAnimator(document.getElementById('out'), {
+  cols: 120, animation: 'dissolve', color: 'mono',
+});
+
+const srcBody = document.getElementById('srcBody');
+const dims = document.getElementById('dims');
+let camOn = false;
+
+function showGlyphSource(g){
+  srcBody.innerHTML = '<span class="glyph">' + g + '</span>';
+}
+function showImgSource(url){
+  srcBody.innerHTML = '';
+  const img = new Image();
+  img.src = url;
+  img.alt = 'source image';
+  srcBody.appendChild(img);
+}
+function updateDims(){
+  dims.textContent = '· ' + art.opts.cols + '×' + art.rows;
+}
+
+/* boot with the reel's fire emoji */
+art.fromText('🔥');
+updateDims();
+
+/* controls */
+document.getElementById('rCols').addEventListener('input', e => {
+  document.getElementById('vCols').textContent = e.target.value;
+  art.set({ cols: +e.target.value });
+  updateDims();
+});
+document.getElementById('sCharset').addEventListener('change', e => art.set({ charset: e.target.value }));
+document.getElementById('sColor').addEventListener('change', e => art.set({ color: e.target.value }));
+document.getElementById('sAnim').addEventListener('change', e => art.set({ animation: e.target.value }));
+
+document.querySelectorAll('.emoji-row button').forEach(b => {
+  b.addEventListener('click', () => {
+    camOff();
+    art.fromText(b.dataset.glyph);
+    showGlyphSource(b.dataset.glyph);
+    updateDims();
+  });
+});
+
+document.getElementById('file').addEventListener('change', async e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  camOff();
+  await art.fromImage(f);
+  showImgSource(URL.createObjectURL(f));
+  updateDims();
+});
+
+const camBtn = document.getElementById('camBtn');
+function camOff(){
+  if (!camOn) return;
+  camOn = false;
+  camBtn.classList.remove('on');
+  camBtn.textContent = 'webcam';
+}
+camBtn.addEventListener('click', async () => {
+  if (camOn) { camOff(); art.fromText('🔥'); showGlyphSource('🔥'); return; }
+  try {
+    await art.fromCamera();
+    camOn = true;
+    camBtn.classList.add('on');
+    camBtn.textContent = 'stop webcam';
+    srcBody.innerHTML = '<span class="glyph">📷</span>';
+    updateDims();
+  } catch (err) {
+    camBtn.textContent = 'camera blocked';
+    setTimeout(() => { camBtn.textContent = 'webcam'; }, 1800);
+  }
+});
+
+document.getElementById('copyBtn').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(art.getText());
+    const t = document.getElementById('toastc');
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 1400);
+  } catch { /* clipboard unavailable */ }
+});
+</script>
+</body>
+</html>
